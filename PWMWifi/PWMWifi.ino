@@ -1,44 +1,33 @@
 /* UNO R4 WiFi → Red Pitaya (SCPI)
-   Two-channel sine with a fixed phase shift
-   - OUT1: sine @ FREQ_HZ, PHASE=0°
-   - OUT2: sine @ FREQ_HZ, PHASE=PHASE_DEG
-   Uses: SOUR<n>:PHAS, OUTPUT:STATE ON, SOUR:TRig:INT
+   Generate PWM on OUT1 with 30% duty
+   Uses official commands: SOUR1:FUNC PWM, SOUR1:DCYC <ratio>, FREQ/AMP/OFFS
 */
 
 #include "wifiSCPI.h"
 #include "arduino_secrets.h"   // SECRET_SSID, SECRET_PASS
 
-// -------- User config --------
-IPAddress RP_IP(192, 168, 0, 17);
-const uint16_t RP_PORT = 5000;
+// ----- User config -----
+IPAddress RP_IP(192, 168, 0, 17);  // Red Pitaya IP
+const uint16_t RP_PORT = 5000;     // SCPI port
 
-const float FREQ_HZ   = 10000.0;  // both channels
-const float AMP_V     = 1.0;      // one-way amplitude
-const float OFFS_V    = 0.0;      // DC offset
-const float PHASE_DEG = 90.0;     // OUT2 phase relative to OUT1
-/* ---------------------------- */
+const float PWM_FREQ_HZ = 1000.0;  // PWM frequency (Hz)
+const float PWM_DUTY    = 0.30;    // 30% duty (ratio 0..1)
+const float AMP_V       = 1.0;     // one-way amplitude (V)
+const float OFFS_V      = 0.0;     // DC offset (V)
+// -----------------------
 
 WifiSCPI rp;
 
-void startTwoSineWithPhase() {
+void startPWM() {
   rp.scpi("GEN:RST");
-
-  // Configure OUT1
-  rp.scpi("SOUR1:FUNC SINE");
-  rp.scpi(String("SOUR1:FREQ:FIX ") + String(FREQ_HZ, 6));
+  rp.scpi("SOUR1:FUNC PWM");
+  rp.scpi(String("SOUR1:FREQ:FIX ") + String(PWM_FREQ_HZ, 6));
   rp.scpi(String("SOUR1:VOLT ")     + String(AMP_V, 6));
   rp.scpi(String("SOUR1:VOLT:OFFS ")+ String(OFFS_V, 6));
-  rp.scpi("SOUR1:PHAS 0");
-
-  // Configure OUT2 (same freq/amp, shifted phase)
-  rp.scpi("SOUR2:FUNC SINE");
-  rp.scpi(String("SOUR2:FREQ:FIX ") + String(FREQ_HZ, 6));
-  rp.scpi(String("SOUR2:VOLT ")     + String(AMP_V, 6));
-  rp.scpi(String("SOUR2:VOLT:OFFS ")+ String(OFFS_V, 6));
-  rp.scpi(String("SOUR2:PHAS ")     + String(PHASE_DEG, 6));
-
-  rp.scpi("OUTPUT:STATE ON");
-  rp.scpi("SOUR:TRig:INT");
+  rp.scpi(String("SOUR1:DCYC ")     + String(PWM_DUTY, 6));
+  rp.scpi("OUTPUT1:STATE ON");
+  rp.scpi("SOUR1:TRig:SOUR INT");
+  rp.scpi("SOUR1:TRig:INT");
 }
 
 void setup() {
@@ -50,15 +39,15 @@ void setup() {
     while(true){}
   }
 
-  startTwoSineWithPhase();
-  Serial.println("Two-channel sine with phase shift is running.");
+  startPWM();
+  Serial.println("PWM (30% duty) running on OUT1.");
 }
 
 void loop() {
   // Optional keep-alive / auto-restart
   if (WiFi.status() != WL_CONNECTED) rp.connectWiFi(SECRET_SSID, SECRET_PASS);
   if (!rp.connected()) {
-    if (rp.connectRP(RP_IP, RP_PORT)) startTwoSineWithPhase();
+    if (rp.connectRP(RP_IP, RP_PORT)) startPWM();
   }
   delay(500);
 }

@@ -1,58 +1,45 @@
 /* UNO R4 WiFi → Red Pitaya (SCPI)
-   Sine burst on OUT1 using official burst commands
-
-   Flow:
-     GEN:RST
-     SOUR1:FUNC SINE
-     SOUR1:FREQ:FIX <Hz>
-     SOUR1:VOLT <V>; SOUR1:VOLT:OFFS <V>
-     SOUR1:BURS:STAT BURST
-     SOUR1:BURS:NCYC <Ncycles>
-     SOUR1:BURS:NOR  <Repetitions>   (65536 == infinite)
-     SOUR1:BURS:INT:PER <Period_us>
-     OUTPUT1:STATE ON
-     SOUR1:TRig:SOUR INT
-     SOUR1:TRig:INT
+   OUT1 sweep using official sweep commands (no manual stepping)
 */
 
 #include "wifiSCPI.h"
-#include "arduino_secrets.h"  // SECRET_SSID, SECRET_PASS
+#include "arduino_secrets.h"   // SECRET_SSID, SECRET_PASS
 
-// ---------- User config ----------
+// ------- User config -------
 IPAddress RP_IP(192, 168, 0, 17);   // your Red Pitaya IP
-const uint16_t RP_PORT = 5000;      // SCPI port
+const uint16_t RP_PORT = 5000;      // SCPI server port
 
-// Signal settings
-const float FREQ_HZ   = 10e3;       // sine frequency
-const float AMP_V     = 0.8;        // one-way amplitude (V). |AMP|+|OFFS| ≤ 1 V on most RP models
-const float OFFS_V    = 0.0;        // DC offset (V)
+// Output amplitude/offset
+const float AMP_V  = 1.0;           // one-way amplitude (V)
+const float OFFS_V = 0.0;           // DC offset (V)
 
-// Burst settings
-const uint32_t NCYCLES      = 5;        // number of sine periods in one burst
-const uint32_t REPETITIONS  = 10;       // number of bursts (65536 == infinite)
-const uint32_t PERIOD_US    = 100000;   // time from start-of-burst to start-of-next (µs)
-// ----------------------------------
+// Sweep config
+const float F_START_HZ = 1e3;       // start frequency (Hz)
+const float F_STOP_HZ  = 20e3;      // stop frequency (Hz)
+const unsigned long SWEEP_TIME_US = 3e6; // sweep time from start→stop, in microseconds
+const bool  LOG_SWEEP   = false;    // false=LINEAR, true=LOG
+const bool  PINGPONG    = true;     // true=UP_DOWN, false=NORMAL (up only)
+const bool  REPEAT_INF  = true;     // infinite repetitions (else one-shot)
+// ---------------------------
 
 WifiSCPI rp;
 
-void startBurst() {
-  // Reset & basic sine settings
+void startSweep() {
   rp.scpi("GEN:RST");
-  rp.scpi("SOUR1:FUNC SINE");
-  rp.scpi(String("SOUR1:FREQ:FIX ") + String(FREQ_HZ, 6));
-  rp.scpi(String("SOUR1:VOLT ")     + String(AMP_V,   6));
-  rp.scpi(String("SOUR1:VOLT:OFFS ")+ String(OFFS_V,  6));
-
-  // --- Burst mode (official commands) ---
-  rp.scpi("SOUR1:BURS:STAT BURST");
-  rp.scpi(String("SOUR1:BURS:NCYC ") + String(NCYCLES));
-  rp.scpi(String("SOUR1:BURS:NOR ")  + String(REPETITIONS));
-  rp.scpi(String("SOUR1:BURS:INT:PER ") + String(PERIOD_US));
-
-  // Output + trigger
+  rp.scpi("SOUR1:FUNC SWEEP");
+  rp.scpi(String("SOUR1:VOLT ") + String(AMP_V, 6));
+  rp.scpi(String("SOUR1:VOLT:OFFS ") + String(OFFS_V, 6));
+  rp.scpi(String("SOUR1:SWeep:FREQ:START ") + String(F_START_HZ, 6));
+  rp.scpi(String("SOUR1:SWeep:FREQ:STOP ")  + String(F_STOP_HZ, 6));
+  rp.scpi(String("SOUR1:SWeep:TIME ")       + String((long)SWEEP_TIME_US));
+  rp.scpi(String("SOUR1:SWeep:MODE ") + (LOG_SWEEP ? "LOG" : "LINEAR"));
+  rp.scpi(String("SOUR1:SWeep:DIR ")  + (PINGPONG ? "UP_DOWN" : "NORMAL"));
+  if (REPEAT_INF) rp.scpi("SOUR1:SWeep:REP:INF ON");
+  else            rp.scpi("SOUR1:SWeep:REP:INF OFF");
   rp.scpi("OUTPUT1:STATE ON");
   rp.scpi("SOUR1:TRig:SOUR INT");
   rp.scpi("SOUR1:TRig:INT");
+  rp.scpi("SOUR1:SWeep:STATE ON");
 }
 
 void setup() {
@@ -64,15 +51,15 @@ void setup() {
     while(true){}
   }
 
-  startBurst();
-  Serial.println("Burst started on OUT1.");
+  startSweep();
+  Serial.println("Sweep running on OUT1.");
 }
 
 void loop() {
-  // Optional keep-alive
+  // Optional keep-alive / auto-restart
   if (WiFi.status() != WL_CONNECTED) rp.connectWiFi(SECRET_SSID, SECRET_PASS);
   if (!rp.connected()) {
-    if (rp.connectRP(RP_IP, RP_PORT)) startBurst();
+    if (rp.connectRP(RP_IP, RP_PORT)) startSweep();
   }
   delay(500);
 }
