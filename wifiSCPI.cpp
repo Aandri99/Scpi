@@ -80,6 +80,3 @@ String WifiSCPI::scpiBlock(const String& s, unsigned long timeout){
   return r;
 }
 
-WiFiClient& WifiSCPI::client(){
-  return _client;
-}
