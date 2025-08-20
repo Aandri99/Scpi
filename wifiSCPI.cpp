@@ -79,3 +79,4 @@ String WifiSCPI::scpiBlock(const String& s, unsigned long timeout){
   }
   return r;
 }
+

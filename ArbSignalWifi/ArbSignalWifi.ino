@@ -4,7 +4,7 @@
     - No acquisition, no LEDs — just ARB gen
 */
 
-#include <WiFiS3.h>
+#include "wifiSCPI.h"
 #include <math.h>
 #include "arduino_secrets.h"   // SECRET_SSID, SECRET_PASS
 
@@ -34,83 +34,51 @@ float ARB_AMPL_V   = 1.0f;     // amplitude (Volts)
 float ARB_OFFS_V   = 0.0f;     // DC offset (Volts)
 /************************************/
 
-WiFiClient client;
-
-/* ---------- SCPI helpers ---------- */
-void scpiFlush() { while (client.available()) (void)client.read(); }
-
-void scpiSend(const String& s) {
-  if (!client.connected()) return;
-  client.print(s);
-  client.print("\r\n");   // CRLF is safest
-}
-
-/* ---------- WiFi / RP connect ---------- */
-bool connectWiFi(unsigned long timeoutMs = 30000) {
-  WiFi.begin(SECRET_SSID, SECRET_PASS);
-  unsigned long t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && (millis() - t0) < timeoutMs) delay(250);
-  if (WiFi.status() != WL_CONNECTED) return false;
-  // ensure not 0.0.0.0
-  unsigned long t1 = millis();
-  while (WiFi.localIP() == IPAddress(0,0,0,0) && millis() - t1 < 3000) delay(50);
-  return true;
-}
-
-bool connectRP() {
-  if (client.connected()) return true;
-  client.stop();
-  return client.connect(RP_IP, RP_PORT);
-}
+WifiSCPI rp;
 
 /* ---------- Waveform: sum of 3 sines, normalized to [-1..+1] ---------- */
 float sum3sines_norm(int i, int N) {
-  // angle step = 2π * i / N (one period fits exactly in N samples)
   float t = 2.0f * (float)M_PI * (float)i / (float)N;
   float x = 0.0f;
   x += AMP1 * sinf(K1 * t + P1);
   x += AMP2 * sinf(K2 * t + P2);
   x += AMP3 * sinf(K3 * t + P3);
-
   float S = fabsf(AMP1) + fabsf(AMP2) + fabsf(AMP3);
-  if (S < 1e-9f) S = 1.0f;   // avoid divide-by-zero
-  x /= S;                    // keep within [-1..+1] conservatively
-  if (x > 1.0f) x = 1.0f;    // hard clamp (rare)
+  if (S < 1e-9f) S = 1.0f;
+  x /= S;
+  if (x > 1.0f) x = 1.0f;
   if (x < -1.0f) x = -1.0f;
   return x;
 }
 
 /* ---------- Upload ARB (chunked), configure, and run ---------- */
 bool uploadSum3SinesOut1(int N) {
-  if (!client.connected()) return false;
+  if (!rp.connected()) return false;
 
   Serial.print("Uploading ARB (N="); Serial.print(N); Serial.print(") ... ");
 
-  scpiSend("GEN:RST");
-  scpiSend("OUTPUT1:STATE OFF");
-  scpiSend("SOUR1:FUNC ARBITRARY");
+  rp.scpi("GEN:RST");
+  rp.scpi("OUTPUT1:STATE OFF");
+  rp.scpi("SOUR1:FUNC ARBITRARY");
 
-  // Stream values: SOUR1:TRAC:DATA:DATA v0,v1,...,vN-1
-  client.print("SOUR1:TRAC:DATA:DATA ");
+  rp.client().print("SOUR1:TRAC:DATA:DATA ");
   const int chunk = 256;
   for (int i = 0; i < N; ++i) {
-    if (i) client.print(",");
-    client.print(sum3sines_norm(i, N), 6);
+    if (i) rp.client().print(",");
+    rp.client().print(sum3sines_norm(i, N), 6);
     if ((i % chunk) == 0) Serial.print(".");
   }
-  client.print("\r\n");
+  rp.client().print("\r\n");
   Serial.println(" done");
 
-  // Frequency scaling: when N < 16384, the device repeats the pattern in the 16k buffer.
-  // Scale so the base tone is exactly F0_HZ.
   float freq_set = F0_HZ * (16384.0f / (float)N);
 
-  client.print("SOUR1:FREQ:FIX ");  client.print(freq_set, 6);     client.print("\r\n");
-  client.print("SOUR1:VOLT ");      client.print(ARB_AMPL_V, 6);   client.print("\r\n");
-  client.print("SOUR1:VOLT:OFFS "); client.print(ARB_OFFS_V, 6);   client.print("\r\n");
-  scpiSend("SOUR1:TRig:SOUR INT");
-  scpiSend("OUTPUT1:STATE ON");
-  scpiSend("SOUR1:TRig:INT");
+  rp.client().print("SOUR1:FREQ:FIX ");  rp.client().print(freq_set, 6);     rp.client().print("\r\n");
+  rp.client().print("SOUR1:VOLT ");      rp.client().print(ARB_AMPL_V, 6);   rp.client().print("\r\n");
+  rp.client().print("SOUR1:VOLT:OFFS "); rp.client().print(ARB_OFFS_V, 6);   rp.client().print("\r\n");
+  rp.scpi("SOUR1:TRig:SOUR INT");
+  rp.scpi("OUTPUT1:STATE ON");
+  rp.scpi("SOUR1:TRig:INT");
   return true;
 }
 
@@ -119,13 +87,10 @@ void setup() {
   Serial.begin(115200);
   delay(150);
 
-  Serial.print("WiFi → ");
-  if (!connectWiFi()) { Serial.println("FAIL"); while (true) delay(1000); }
-  Serial.print("OK, IP="); Serial.println(WiFi.localIP());
-
-  Serial.print("Connecting to RP "); Serial.print(RP_IP); Serial.print(":"); Serial.println(RP_PORT);
-  if (!connectRP()) { Serial.println("TCP connect failed"); while (true) delay(1000); }
-  Serial.println("TCP connected");
+  if(!rp.begin(SECRET_SSID, SECRET_PASS, RP_IP, RP_PORT)){
+    Serial.println(F("Failed to connect"));
+    while(true){}
+  }
 
   // Upload and start the 3-sine sum on OUT1
   uploadSum3SinesOut1(ARB_NPTS);
@@ -135,9 +100,10 @@ void setup() {
 
 void loop() {
   // Keep the link healthy (optional)
-  if (WiFi.status() != WL_CONNECTED) connectWiFi();
-  if (!client.connected()) {
-    if (connectRP()) uploadSum3SinesOut1(ARB_NPTS); // re-arm after reconnect
+  if (WiFi.status() != WL_CONNECTED) rp.connectWiFi(SECRET_SSID, SECRET_PASS);
+  if (!rp.connected()) {
+    if (rp.connectRP(RP_IP, RP_PORT)) uploadSum3SinesOut1(ARB_NPTS); // re-arm after reconnect
   }
   delay(500);
 }
+

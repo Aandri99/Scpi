@@ -14,6 +14,7 @@ public:
   String scpiBlock(const String& s, unsigned long timeout = 10000);
   void scpiFlush();
   bool connected() { return _client.connected(); }
+
 private:
   WiFiClient _client;
 };
