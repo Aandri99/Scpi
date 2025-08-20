@@ -15,7 +15,7 @@
      SOUR1:TRig:INT
 */
 
-#include <WiFiS3.h>
+#include "wifiSCPI.h"
 #include "arduino_secrets.h"  // SECRET_SSID, SECRET_PASS
 
 // ---------- User config ----------
@@ -33,58 +33,36 @@ const uint32_t REPETITIONS  = 10;       // number of bursts (65536 == infinite)
 const uint32_t PERIOD_US    = 100000;   // time from start-of-burst to start-of-next (µs)
 // ----------------------------------
 
-WiFiClient client;
-
-bool connectWiFi(unsigned long timeoutMs = 30000) {
-  WiFi.begin(SECRET_SSID, SECRET_PASS);
-  unsigned long t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < timeoutMs) delay(250);
-  if (WiFi.status() != WL_CONNECTED) return false;
-  unsigned long t1 = millis();
-  while (WiFi.localIP() == IPAddress(0,0,0,0) && millis() - t1 < 3000) delay(50);
-  return true;
-}
-bool connectRP() {
-  if (client.connected()) return true;
-  client.stop();
-  return client.connect(RP_IP, RP_PORT);
-}
-inline void scpiSend(const String& s) {
-  if (!client.connected()) return;
-  client.print(s); client.print("\r\n");   // CRLF per SCPI
-}
+WifiSCPI rp;
 
 void startBurst() {
   // Reset & basic sine settings
-  scpiSend("GEN:RST");
-  scpiSend("SOUR1:FUNC SINE");
-  scpiSend(String("SOUR1:FREQ:FIX ") + String(FREQ_HZ, 6));
-  scpiSend(String("SOUR1:VOLT ")     + String(AMP_V,   6));
-  scpiSend(String("SOUR1:VOLT:OFFS ")+ String(OFFS_V,  6));
+  rp.scpi("GEN:RST");
+  rp.scpi("SOUR1:FUNC SINE");
+  rp.scpi(String("SOUR1:FREQ:FIX ") + String(FREQ_HZ, 6));
+  rp.scpi(String("SOUR1:VOLT ")     + String(AMP_V,   6));
+  rp.scpi(String("SOUR1:VOLT:OFFS ")+ String(OFFS_V,  6));
 
   // --- Burst mode (official commands) ---
-  scpiSend("SOUR1:BURS:STAT BURST");                     // enable burst mode
-  scpiSend(String("SOUR1:BURS:NCYC ") + String(NCYCLES));        // cycles per burst
-  scpiSend(String("SOUR1:BURS:NOR ")  + String(REPETITIONS));    // number of bursts (65536 == INF)
-  scpiSend(String("SOUR1:BURS:INT:PER ") + String(PERIOD_US));   // period between burst starts, in µs
+  rp.scpi("SOUR1:BURS:STAT BURST");
+  rp.scpi(String("SOUR1:BURS:NCYC ") + String(NCYCLES));
+  rp.scpi(String("SOUR1:BURS:NOR ")  + String(REPETITIONS));
+  rp.scpi(String("SOUR1:BURS:INT:PER ") + String(PERIOD_US));
 
   // Output + trigger
-  scpiSend("OUTPUT1:STATE ON");        // enable output driver
-  scpiSend("SOUR1:TRig:SOUR INT");     // internal trigger
-  scpiSend("SOUR1:TRig:INT");          // start now
+  rp.scpi("OUTPUT1:STATE ON");
+  rp.scpi("SOUR1:TRig:SOUR INT");
+  rp.scpi("SOUR1:TRig:INT");
 }
 
 void setup() {
   Serial.begin(115200);
   delay(150);
 
-  Serial.print("WiFi → ");
-  if (!connectWiFi()) { Serial.println("FAIL"); while (true) delay(1000); }
-  Serial.print("OK, IP="); Serial.println(WiFi.localIP());
-
-  Serial.print("Connecting to RP "); Serial.print(RP_IP); Serial.print(":"); Serial.println(RP_PORT);
-  if (!connectRP()) { Serial.println("TCP connect failed"); while (true) delay(1000); }
-  Serial.println("TCP connected");
+  if(!rp.begin(SECRET_SSID, SECRET_PASS, RP_IP, RP_PORT)){
+    Serial.println(F("Failed to connect"));
+    while(true){}
+  }
 
   startBurst();
   Serial.println("Burst started on OUT1.");
@@ -92,9 +70,10 @@ void setup() {
 
 void loop() {
   // Optional keep-alive
-  if (WiFi.status() != WL_CONNECTED) connectWiFi();
-  if (!client.connected()) {
-    if (connectRP()) startBurst();
+  if (WiFi.status() != WL_CONNECTED) rp.connectWiFi(SECRET_SSID, SECRET_PASS);
+  if (!rp.connected()) {
+    if (rp.connectRP(RP_IP, RP_PORT)) startBurst();
   }
   delay(500);
 }
+
